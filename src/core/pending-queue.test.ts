@@ -1,45 +1,42 @@
 import { describe, it, expect } from 'vitest';
 import { PendingQueue } from './pending-queue';
-import { BaseItem } from '../interfaces/base-item';
+import { BaseItem, Operation } from '../interfaces';
 
-// Mock item type for testing
-interface TestItem extends BaseItem {
-  name: string;
-}
+interface TestItem extends BaseItem { name: string }
 
 describe('PendingQueue', () => {
-  it('should enqueue and dequeue items correctly', () => {
+  it('should enqueue and dequeue operations correctly', () => {
     const queue = new PendingQueue<TestItem>();
-    const item1: TestItem = { id: '1', name: 'item1', updatedAt: 1 };
-    const item2: TestItem = { id: '2', name: 'item2', updatedAt: 2 };
+    const op1: Operation<TestItem> = { type: 'add', item: { id: '1', name: 'item1', updatedAt: 1 } };
+    const op2: Operation<TestItem> = { type: 'add', item: { id: '2', name: 'item2', updatedAt: 2 } };
 
-    queue.enqueue(item1);
-    queue.enqueue(item2);
+    queue.enqueue(op1);
+    queue.enqueue(op2);
 
     expect(queue.size).toBe(2);
-    expect(queue.dequeue()).toBe(item1);
+    expect(queue.dequeue()).toBe(op1);
     expect(queue.size).toBe(1);
-    expect(queue.dequeue()).toBe(item2);
+    expect(queue.dequeue()).toBe(op2);
     expect(queue.size).toBe(0);
   });
 
-  it('should remove items by id', () => {
+  it('should remove operations by id', () => {
     const queue = new PendingQueue<TestItem>();
-    const item1: TestItem = { id: '1', name: 'item1', updatedAt: 1 };
-    const item2: TestItem = { id: '2', name: 'item2', updatedAt: 2 };
+    const op1: Operation<TestItem> = { type: 'add', item: { id: '1', name: 'item1', updatedAt: 1 } };
+    const op2: Operation<TestItem> = { type: 'add', item: { id: '2', name: 'item2', updatedAt: 2 } };
 
-    queue.enqueue(item1);
-    queue.enqueue(item2);
+    queue.enqueue(op1);
+    queue.enqueue(op2);
     queue.remove('1');
 
     expect(queue.size).toBe(1);
-    expect(queue.dequeue()).toBe(item2);
+    expect(queue.dequeue()).toBe(op2);
   });
 
-  it('should clear all items', () => {
+  it('should clear all operations', () => {
     const queue = new PendingQueue<TestItem>();
-    const item1: TestItem = { id: '1', name: 'item1', updatedAt: 1 };
-    queue.enqueue(item1);
+    const op1: Operation<TestItem> = { type: 'add', item: { id: '1', name: 'item1', updatedAt: 1 } };
+    queue.enqueue(op1);
 
     queue.clear();
     expect(queue.size).toBe(0);

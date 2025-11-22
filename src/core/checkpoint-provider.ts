@@ -1,23 +1,24 @@
-import { LocalAdapter } from '../adapters/local-adapter';
-import { BaseItem } from '../interfaces/base-item';
+import { LocalAdapter } from '../adapters';
+import { BaseItem } from '../interfaces';
 
 export class CheckpointProvider {
   private localAdapter: LocalAdapter<BaseItem>;
-  private checkpoint: number | null = null;
+  private checkpoints: Map<string, number | null> = new Map();
 
   constructor(localAdapter: LocalAdapter<BaseItem>) {
     this.localAdapter = localAdapter;
   }
 
-  public async getCheckpoint(): Promise<number | null> {
-    if (this.checkpoint === null) {
-      this.checkpoint = await this.localAdapter.getCheckpoint();
+  public async getCheckpoint(listName: string): Promise<number | null> {
+    if (!this.checkpoints.has(listName)) {
+      const checkpoint = await this.localAdapter.getCheckpoint(listName);
+      this.checkpoints.set(listName, checkpoint);
     }
-    return this.checkpoint;
+    return this.checkpoints.get(listName) || null;
   }
 
-  public async updateCheckpoint(newCheckpoint: number): Promise<void> {
-    this.checkpoint = newCheckpoint;
-    await this.localAdapter.updateCheckpoint(newCheckpoint);
+  public async updateCheckpoint(listName: string, newCheckpoint: number): Promise<void> {
+    this.checkpoints.set(listName, newCheckpoint);
+    await this.localAdapter.upsertCheckpoint(listName, newCheckpoint);
   }
 }

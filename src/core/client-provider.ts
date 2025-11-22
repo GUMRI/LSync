@@ -1,45 +1,53 @@
+import { LocalAdapter, RemoteAdapter } from '../adapters';
+import { BaseItem } from '../interfaces';
 import { NetworkObserver } from './network-observer';
 
-const CLIENT_ID_KEY = 'lsync_client_id';
+export class ClientProvider {
+  private localAdapter: LocalAdapter<BaseItem>;
+  private remoteAdapter: RemoteAdapter<BaseItem>;
+  private networkObserver: NetworkObserver;
+  private clientId: string | null = null;
 
-export abstract class ClientProvider {
-  protected clientId: string;
-  protected networkObserver: NetworkObserver;
-
-  constructor(networkObserver: NetworkObserver) {
-    this.clientId = this.getClientId();
+  constructor(
+    localAdapter: LocalAdapter<BaseItem>,
+    remoteAdapter: RemoteAdapter<BaseItem>,
+    networkObserver: NetworkObserver
+  ) {
+    this.localAdapter = localAdapter;
+    this.remoteAdapter = remoteAdapter;
     this.networkObserver = networkObserver;
-    this.networkObserver.subscribe(status => {
-      if (status === 'online') {
-        this.setOnline();
-      } else {
-        this.setOffline();
-      }
-    });
+
+    this.initialize();
+    this.networkObserver.subscribe(this.handleNetworkChange);
   }
 
-  private getClientId(): string {
-    let id = localStorage.getItem(CLIENT_ID_KEY);
-    if (!id) {
-      id = this.generateUniqueId();
-      localStorage.setItem(CLIENT_ID_KEY, id);
+  private async initialize(): Promise<void> {
+    this.clientId = await this.localAdapter.getClientId();
+    if (!this.clientId) {
+      this.clientId = crypto.randomUUID();
+      await this.localAdapter.setClientId(this.clientId);
     }
-    return id;
+    this.handleNetworkChange(this.networkObserver.isOnline ? 'online' : 'offline');
   }
 
-  private generateUniqueId(): string {
-     return crypto.randomUUID();
-  }
+  private handleNetworkChange = async (status: 'online' | 'offline'): Promise<void> => {
+    if (!this.clientId) return;
 
-  public getCurrentClientId(): string {
+    if (status === 'online') {
+      await this.remoteAdapter.deleteOfflineClient(this.clientId);
+    } else {
+      await this.remoteAdapter.setOfflineClient(this.clientId);
+    }
+  };
+
+  public async getCurrentClientId(): Promise<string> {
+    if (!this.clientId) {
+      throw new Error('ClientProvider not initialized.');
+    }
     return this.clientId;
   }
 
-  public cleanup(): void {
-    this.networkObserver.cleanup();
+  public getOfflineClients(): Promise<string[]> {
+    return this.remoteAdapter.getOfflineClients();
   }
-
-  abstract setOnline(): Promise<void>;
-  abstract setOffline(): Promise<void>;
-  abstract getOfflineClients(): Promise<string[]>;
 }

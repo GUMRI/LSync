@@ -5,16 +5,24 @@ type StatusChangeListener = (status: NetworkStatus) => void;
 export class NetworkObserver {
   private status: NetworkStatus;
   private listeners: Set<StatusChangeListener> = new Set();
+  private window: Window;
 
-  constructor() {
-    this.status = navigator.onLine ? 'online' : 'offline';
+  constructor(win: Window | null = globalThis.window) {
+    if (!win) {
+      // Fallback for non-browser environments during testing
+      this.window = { addEventListener: () => {}, removeEventListener: () => {} } as any;
+      this.status = 'online';
+    } else {
+      this.window = win;
+      this.status = this.window.navigator.onLine ? 'online' : 'offline';
+    }
     this.addEventListeners();
   }
 
   private addEventListeners(): void {
-    window.addEventListener('online', this.handleOnline);
-    window.addEventListener('offline', this.handleOffline);
-    window.addEventListener('beforeunload', this.handleUnload);
+    this.window.addEventListener('online', this.handleOnline);
+    this.window.addEventListener('offline', this.handleOffline);
+    this.window.addEventListener('beforeunload', this.handleUnload);
   }
 
   private handleOnline = (): void => {
@@ -26,8 +34,6 @@ export class NetworkObserver {
   };
 
   private handleUnload = (): void => {
-    // This is a last-ditch effort to notify that the client is offline.
-    // The actual logic of setting the client's state will be in the ClientProvider.
     this.setStatus('offline');
   };
 
@@ -44,14 +50,13 @@ export class NetworkObserver {
 
   public subscribe(listener: StatusChangeListener): () => void {
     this.listeners.add(listener);
-    // Return an unsubscribe function
     return () => this.listeners.delete(listener);
   }
 
   public cleanup(): void {
-    window.removeEventListener('online', this.handleOnline);
-    window.removeEventListener('offline', this.handleOffline);
-    window.removeEventListener('beforeunload', this.handleUnload);
+    this.window.removeEventListener('online', this.handleOnline);
+    this.window.removeEventListener('offline', this.handleOffline);
+    this.window.removeEventListener('beforeunload', this.handleUnload);
     this.listeners.clear();
   }
 }

@@ -1,61 +1,57 @@
-import { BaseItem } from '../interfaces/base-item';
-import { DeleteEntry } from '../interfaces/delete-entry';
-import { ClientProvider } from './client-provider';
-import { ILocalSyncAdapter } from '../interfaces/local-sync-adapter';
+import { BaseItem, DeleteEntry, RemoteAdapter } from '../interfaces';
 
 export class RemoveWinsHandler<T extends BaseItem> {
-  private localAdapter: ILocalSyncAdapter<T>;
-  private clientProvider: ClientProvider;
+  private remoteAdapter: RemoteAdapter<T>;
 
-  constructor(
-    localAdapter: ILocalSyncAdapter<T>,
-    clientProvider: ClientProvider
-  ) {
-    this.localAdapter = localAdapter;
-    this.clientProvider = clientProvider;
+  constructor(remoteAdapter: RemoteAdapter<T>) {
+    this.remoteAdapter = remoteAdapter;
   }
 
   private generateUniqueId(): string {
-     return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
   }
 
-  public async handleDelete(ids: string[]): Promise<void> {
-    const offlineClients = await this.clientProvider.getOfflineClients();
-    if (offlineClients.length > 0) {
-      const deleteEntry: DeleteEntry = {
-        id: this.generateUniqueId(),
-        ids,
-        pendingClients: offlineClients,
-      };
-      await this.localAdapter.createDeleteEntry(deleteEntry);
+  public async createDeleteEntry(
+    listName: string,
+    ids: string[],
+    offlineClients: string[]
+  ): Promise<void> {
+    if (offlineClients.length === 0) {
+      return;
     }
+
+    const deleteEntry: DeleteEntry = {
+      id: this.generateUniqueId(),
+      ids,
+      pendingClients: offlineClients,
+    };
+    await this.remoteAdapter.upsertDeletedEntry(listName, deleteEntry);
   }
 
-  public async handleClientOnline(): Promise<void> {
-    const clientId = this.clientProvider.getCurrentClientId();
-    const deleteEntries = await this.localAdapter.fetchDeleteEntries();
-
-    for (const entry of deleteEntries) {
-      const index = entry.pendingClients.indexOf(clientId);
-      if (index > -1) {
-        entry.pendingClients.splice(index, 1);
-        await this.localAdapter.updateDeleteEntry(entry);
+  public handleClientOnline(listName: string, clientId: string): () => void {
+    const unsubscribe = this.remoteAdapter.watchDeletedEntries(
+      listName,
+      async (entries) => {
+        for (const entry of entries) {
+          const clientIndex = entry.pendingClients.indexOf(clientId);
+          if (clientIndex > -1) {
+            entry.pendingClients.splice(clientIndex, 1);
+            await this.remoteAdapter.upsertDeletedEntry(listName, entry);
+          }
+        }
       }
-    }
-
-    await this.garbageCollect();
+    );
+    return unsubscribe;
   }
 
-  public async isDeleted(id: string): Promise<boolean> {
-    const deleteEntries = await this.localAdapter.fetchDeleteEntries();
-    return deleteEntries.some(entry => entry.ids.includes(id));
+  public isDeleted(id: string, deletedEntries: DeleteEntry[]): boolean {
+    return deletedEntries.some(entry => entry.ids.includes(id));
   }
 
-  private async garbageCollect(): Promise<void> {
-    const deleteEntries = await this.localAdapter.fetchDeleteEntries();
-    for (const entry of deleteEntries) {
+  public async garbageCollect(listName: string, entries: DeleteEntry[]): Promise<void> {
+    for (const entry of entries) {
       if (entry.pendingClients.length === 0) {
-        await this.localAdapter.removeDeleteEntry(entry.id);
+        await this.remoteAdapter.deleteDeletedEntry(listName, entry.id);
       }
     }
   }

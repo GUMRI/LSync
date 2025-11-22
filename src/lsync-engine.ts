@@ -1,82 +1,115 @@
-import { BaseItem } from './interfaces/base-item';
-import { ISyncAdapter } from './interfaces/sync-adapter';
-import { ISyncStrategy } from './interfaces/sync-strategy';
-import { RemoveWinsHandler } from './core/remove-wins-handler';
-import { ClientProvider } from './core/client-provider';
-import { NetworkObserver } from './core/network-observer';
-import { ILocalSyncAdapter } from './interfaces/local-sync-adapter';
+import {
+  BaseItem,
+  ILocalSyncAdapter,
+  ISyncAdapter,
+  ISyncStrategy,
+  OperationsMap,
+} from './interfaces';
+import {
+  CheckpointProvider,
+  ClientProvider,
+  LwwConflictHandler,
+  NetworkObserver,
+  PendingQueue,
+  RemoveWinsHandler,
+} from './core';
 
 interface LSyncEngineConfig<T extends BaseItem> {
   localAdapter: ILocalSyncAdapter<T>;
   remoteAdapter: ISyncAdapter<T>;
   strategy: ISyncStrategy<T>;
-  clientProvider: ClientProvider;
-  networkObserver: NetworkObserver;
 }
 
 export class LSyncEngine<T extends BaseItem> {
   private localAdapter: ILocalSyncAdapter<T>;
   private remoteAdapter: ISyncAdapter<T>;
   private strategy: ISyncStrategy<T>;
+
+  // Core components
   private clientProvider: ClientProvider;
   private removeWinsHandler: RemoveWinsHandler<T>;
+  private pendingQueue: PendingQueue<T>;
   private networkObserver: NetworkObserver;
-  private isRunning: boolean = false;
+  private conflictHandler: LwwConflictHandler<T>;
+  private checkpointProvider: CheckpointProvider;
+
+  private activeLists: Set<string> = new Set();
 
   constructor(config: LSyncEngineConfig<T>) {
     this.localAdapter = config.localAdapter;
     this.remoteAdapter = config.remoteAdapter;
     this.strategy = config.strategy;
-    this.clientProvider = config.clientProvider;
-    this.networkObserver = config.networkObserver;
 
-    this.removeWinsHandler = new RemoveWinsHandler(this.localAdapter, this.clientProvider);
+    // Internal component setup
+    this.networkObserver = new NetworkObserver();
+    this.clientProvider = new ClientProvider(this.localAdapter, this.remoteAdapter, this.networkObserver);
+    this.removeWinsHandler = new RemoveWinsHandler(this.remoteAdapter);
+    this.pendingQueue = new PendingQueue<T>();
+    this.checkpointProvider = new CheckpointProvider(this.localAdapter);
+    this.conflictHandler = new LwwConflictHandler<T>();
 
-    this.networkObserver.subscribe(this.handleNetworkChange);
+    this.strategy.setup({
+      localAdapter: this.localAdapter,
+      remoteAdapter: this.remoteAdapter,
+      checkpointProvider: this.checkpointProvider,
+      conflictHandler: this.conflictHandler,
+      pendingQueue: this.pendingQueue,
+      removeWinsHandler: this.removeWinsHandler,
+    });
   }
 
-  public async start(): Promise<void> {
-    if (this.isRunning) {
-      console.warn('LSyncEngine is already running.');
+  public async start(listName: string): Promise<void> {
+    if (this.activeLists.has(listName)) {
+      console.warn(`LSyncEngine is already running for list: ${listName}.`);
       return;
     }
-    await this.strategy.setup(this.localAdapter, this.remoteAdapter);
-    this.isRunning = true;
-    console.log('LSyncEngine started.');
-    // Initial sync
-    await this.sync();
+    this.activeLists.add(listName);
+    await this.strategy.execute(listName);
+    console.log(`LSyncEngine started for list: ${listName}.`);
   }
 
-  public async stop(): Promise<void> {
-    if (!this.isRunning) {
+  public async stop(listName: string): Promise<void> {
+    if (!this.activeLists.has(listName)) {
       return;
     }
-    await this.strategy.cleanup();
-    this.networkObserver.cleanup();
-    this.isRunning = false;
-    console.log('LSyncEngine stopped.');
+    await this.strategy.cleanup(listName);
+    this.activeLists.delete(listName);
+    console.log(`LSyncEngine stopped for list: ${listName}.`);
   }
 
-  private async sync(): Promise<void> {
+  public async mutate(listName: string, operations: OperationsMap<T>): Promise<void> {
+    // Optimistic local update
+    const toAdd = Array.from(operations.values()).filter(op => op.type === 'add').map(op => op.item as T);
+    const toUpdate = Array.from(operations.values()).filter(op => op.type === 'update').map(op => op.item as Partial<T> & { id: string });
+    const toDelete = Array.from(operations.values()).filter(op => op.type === 'delete').map(op => (op.item as { id: string }).id);
+
+    if (toAdd.length > 0) await this.localAdapter.addMany(listName, toAdd);
+    if (toUpdate.length > 0) await this.localAdapter.updateMany(listName, toUpdate);
+    if (toDelete.length > 0) await this.localAdapter.deleteMany(listName, toDelete);
+
     if (this.networkObserver.isOnline) {
-      await this.strategy.execute();
+      await this.pushPendingChanges(listName);
+      await this.remoteAdapter.mutate(listName, operations);
+      if (toDelete.length > 0) {
+        const offlineClients = await this.clientProvider.getOfflineClients();
+        await this.removeWinsHandler.createDeleteEntry(listName, toDelete, offlineClients);
+      }
     } else {
-      console.log('Client is offline. Sync deferred.');
+      // If offline, queue all operations
+      operations.forEach(op => this.pendingQueue.enqueue(op));
     }
   }
 
-  public async delete(ids: string[]): Promise<void> {
-    await Promise.all([
-      ...ids.map(id => this.localAdapter.deleteItem(id)),
-      ...ids.map(id => this.remoteAdapter.deleteItem(id)),
-    ]);
-    await this.removeWinsHandler.handleDelete(ids);
-  }
+  private async pushPendingChanges(listName: string): Promise<void> {
+    if (this.pendingQueue.size === 0) return;
 
-  private handleNetworkChange = (status: 'online' | 'offline'): void => {
-    if (status === 'online') {
-      this.removeWinsHandler.handleClientOnline();
-      this.sync();
-    }
-  };
+    const operations: OperationsMap<T> = new Map();
+    this.pendingQueue.all.forEach(op => {
+      const itemId = (op.item as { id: string }).id;
+      operations.set(itemId, op);
+    });
+
+    await this.remoteAdapter.mutate(listName, operations);
+    this.pendingQueue.clear();
+  }
 }

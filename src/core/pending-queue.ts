@@ -1,22 +1,24 @@
-import { BaseItem } from '../interfaces/base-item';
+import { BaseItem, Operation } from '../interfaces';
 
 export class PendingQueue<T extends BaseItem> {
-  private queue: T[] = [];
+  private queue: Operation<T>[] = [];
 
-  public enqueue(item: T): void {
-    this.remove(item.id);
-    this.queue.push(item);
+  public enqueue(operation: Operation<T>): void {
+    // Remove any existing operation for the same item ID
+    const itemId = (operation.item as { id: string }).id;
+    this.remove(itemId);
+    this.queue.push(operation);
   }
 
-  public dequeue(): T | undefined {
+  public dequeue(): Operation<T> | undefined {
     return this.queue.shift();
   }
 
   public remove(id: string): void {
-    this.queue = this.queue.filter(item => item.id !== id);
+    this.queue = this.queue.filter(op => (op.item as { id: string }).id !== id);
   }
 
-  public get all(): T[] {
+  public get all(): Operation<T>[] {
     return [...this.queue];
   }
 

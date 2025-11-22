@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { LwwConflictHandler } from './lww-conflict-handler';
-import { BaseItem } from '../interfaces/base-item';
+import { BaseItem } from '../interfaces';
 
 // Mock item type for testing
 interface TestItem extends BaseItem {
